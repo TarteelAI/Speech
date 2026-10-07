@@ -22,6 +22,7 @@ from typing import Any, List, Optional, Sequence, Tuple, Union
 import lhotse
 import numpy as np
 import torch
+from hydra.utils import instantiate
 from lhotse import CutSet, RecordingSet
 from lhotse.cut import Cut
 from lhotse.dataset import (
@@ -84,6 +85,8 @@ class LhotseDataLoadingConfig:
     #   b. Lhotse CutSet manifest / Lhotse Shar tar dir paths.
     cuts_path: str | None = None
     shar_path: Any = None  # str | list[str | tuple[str, float | int]] | None = None
+    #   c. Generic cut transforms ({_target_: ...}), applied cut-by-cut before tokenization.
+    cut_transforms: Any = None  # list[dict] | None
     #  Enable this to support dataloading from JSON manifests that reference subsets of audio tar files.
     skip_missing_manifest_entries: bool = False
     tarred_random_access: bool = False  # deprecated, replaced by: skip_missing_manifest_entries
@@ -518,6 +521,13 @@ def get_lhotse_sampler_from_config(config, global_rank, world_size, tokenizer=No
 
     # Resample as a safeguard; it's a no-op when SR is already OK
     cuts = cuts.map(partial(resample, sampling_rate=config.sample_rate), apply_fn=None)
+
+    # Generic cut transforms (e.g. word masking), applied before tokenization so a
+    # text-editing transform's output is what gets tokenized. These do metadata-only
+    # work here; any audio manipulation is deferred to load_audio() in the workers.
+    if config.cut_transforms is not None:
+        for tcfg in config.cut_transforms:
+            cuts = cuts.map(instantiate(tcfg), apply_fn=None)
 
     # Expands cuts if multiple translations are provided.
     cuts = CutSet(LazyFlattener(cuts.map(_flatten_alt_text, apply_fn=None)))
